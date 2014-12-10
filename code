@@ -1,0 +1,197 @@
+#include <Servo.h>
+
+// Defining pins
+const int xPin = 0; // Accelerometer sensor pin X connected to Arduino analog pin 0
+const int yPin = 1; // Accelerometer sensor pin Y connected to Arduino analog pin 1
+const int zPin = 2; // Accelerometer sensor pin Z connected to Arduino analog pin 2
+const int minVal = 290; // Minimum value reported by the accelerometer
+const int maxVal = 450; // Maximum value reported by the accelerometer
+const int OPEN = 40;
+const int CLOSE = 110;
+
+
+int reed_sw = 4; // Reed switch to Arduino digital pin 4
+int vibrator = 10; // Led connected to pin 13
+int servo = 9; // Servo connceted to pin 9
+
+int usrkeycode[6] = {9,9,9,9,9,9}; // Array to record the sequence of the box turns (9 indicates non recorded value)
+int usrkeycodecounter = 0; // Counting turns
+int lastusrkeycode = 9; // Value of the last turn, old position
+int sequence[6] = {0,4,3,2,5,0}; // Right sequence to open the box
+int sequence_length = 6;
+boolean reset = false; // Indicates if the state has been reset and the box has to be put into 0 position
+unsigned long timelastturned; // Recording time when the box was last turned
+boolean totalsuccess = false; // Indicates that user successfully performed all turns required to access the box
+int reedSwitchValue = 1; // Initial reed switch value
+boolean opened_on_success = false; // Indicates whether the lid is open or closed in the success state
+Servo myservo; // Servo control
+
+//Setting up the environment
+void setup() {
+  pinMode(reed_sw, INPUT); // Pin reed switch to accept input
+  pinMode(vibrator, OUTPUT); // Pin vibrator to provide output
+  myservo.attach(servo); // Pin servo to provide output
+  // !!!
+  myservo.write(CLOSE); // Putting servo into initial position (locked)
+  Serial.begin(9600); // Setting the connection
+}
+
+// Execution loop
+void loop() {
+  
+  delay(200); // Delay of 0.2 sec on each loop iteration
+  
+  reedSwitchValue = digitalRead(reed_sw); // Setting reed switch value that indicates open/ closed lid
+  
+  // READ SWITCH TEST START
+  //Serial.println(reedSwitchValue);
+  //return;
+  // READ SWITCH TEST END
+
+  // Detecting if the lid was opened 
+  // the sequence was performed correctly and the lid is open and wasn't open before
+  if(totalsuccess && reedSwitchValue==0 && !opened_on_success) {
+    Serial.println("opened_on_success");
+    opened_on_success = true;
+  }
+  // Detecting if the lid was closed, locking the box and resetting it
+  if(opened_on_success==true && reedSwitchValue==1) {
+     Serial.println("closed_on_success");
+     opened_on_success = false;
+     delay(600);
+     myservo.write(CLOSE); // Putting servo into initial position (locked)
+     resetstate();
+  }
+
+  int position = getTiltPosition(); // Getting the new position provided by the accelerometer
+  
+  // After the state has been reset, waiting for the box to be put into a 0 position
+  if(reset) {
+    // Once the box is in 0 position, setting reset indicator to false so you can start playing again
+    if(position == 0) reset = false;
+  }
+  
+  // Comparing current time with the time of last turn, if the time is more than 10s reseting the state
+  if(millis()-timelastturned>10000 && !totalsuccess) {
+    Serial.println("Timeout");
+    resetstate();
+  }
+
+  // Recording the first 6 changes in the position of the box
+  if(lastusrkeycode-position!=0 && usrkeycodecounter<sequence_length && !reset && !totalsuccess) { // "lastusrkeycode-position!=0" checks if new position is different from an old position 
+
+    usrkeycode[usrkeycodecounter] = position; // Recording a new position to the array that holds the sequence
+
+    if(usrkeycode[usrkeycodecounter] == sequence[usrkeycodecounter]) { // checks if the user turned the box to the right side by checking if the user sequence corrresponds to the required sequence
+      Serial.println("success");
+      // On the 6th turn (usrkeycodecounter==5) putting box into total success state and unlockin the lid
+      if(usrkeycodecounter==sequence_length-1) {
+        Serial.println("TOTAL SUCCSEES: OPEN THE BOX!!!");
+        totalsuccess = true;
+        myservo.write(OPEN); // unlocking the lid by turning servo up to 110 degrees
+        
+        // Vibrating for 1.5 sec, indicating that user may now open the lid
+        digitalWrite(vibrator, HIGH);
+        delay(1500);
+        digitalWrite(vibrator, LOW);
+      }  
+    } 
+    else {
+      Serial.println("fail"); // Basic indicators
+      usrkeycodecounter++; // Allowing to pass to the next turn in the sequence
+      resetstate(); // in case of wrong turn resetting the state, requiring user to start all over again
+      return; // Preventing further execution of the program in case of reset
+    }
+
+    lastusrkeycode = position; // Updating the old value to the new value, allowing to pass 
+    usrkeycodecounter++; // Allowing to pass to the next turn in the sequence
+    timelastturned = millis(); // Recordig the time of current turn
+    
+    printusrkeycode(); // Printing entered user sequence for debugging purposes
+  }
+}
+
+// Function to reset the state
+void resetstate() {
+  Serial.println("reseting state");
+  printusrkeycode(); // Printing user sequence for debugging purposes
+  
+  // If we're not in an initial state, vibrating twice on wrong turns
+  if(usrkeycodecounter>1) {
+    digitalWrite(vibrator, HIGH);
+    delay(500);
+    digitalWrite(vibrator, LOW);
+    delay(500);
+    digitalWrite(vibrator, HIGH);
+    delay(500);
+    digitalWrite(vibrator, LOW);
+  }
+  
+  // Reset the user keycode array values
+  for(int i=0; i<6; i++) {
+    usrkeycode[i] = 9;
+  }
+  usrkeycodecounter = 0; // Resetting turn counter to 0
+  lastusrkeycode = 9; // Resetting last turned side to the "empty" value
+  reset = true; // Indicates that the state has been reset which will require user to bring box to 0 position
+  timelastturned = millis(); // Recording the time of current turn
+  totalsuccess = false; // Resetting total success variable
+}
+
+// Debugging function to print the state of the usrkeycode array
+void printusrkeycode() {
+  // Printing the turns with values
+  for(int i=0; i<sequence_length; i++) {
+    // Printing value if it is not 9 (9 indicates non recorded value)
+    if(usrkeycode[i]!=9) {
+      Serial.print(usrkeycode[i]);
+    }
+  }
+  // Printing two empty lines to make it more readable
+  Serial.println("");
+  Serial.println("");
+}
+
+// Function that is reading the accelerometer and converts its data to intiger representing sides of the box
+int getTiltPosition() {
+  
+  int ret_val;
+  
+  // Reading values from the pins
+  int xRead = analogRead(xPin);
+  int yRead = analogRead(yPin);
+  int zRead = analogRead(zPin);
+  
+  // Mapping reported values from -90 to 90 degree angles
+  int xAng = map(xRead, minVal, maxVal, -90, 90);
+  int yAng = map(yRead, minVal, maxVal, -90, 90);
+  int zAng = map(zRead, minVal, maxVal, -90, 90);
+  
+  // Calculating absolute values to find on which access the box resudes (X, Y, Z)
+  int xAxis = abs(xAng);
+  int yAxis = abs(yAng);
+  int zAxis = abs(zAng);
+  
+  // Checking for X axis
+  if(xAxis>yAxis && xAxis>zAxis) {
+    // Mapping positive angle on X axis to side 3 and negative angle to side 1
+    if(xAng>0) ret_val = 3;
+    else ret_val = 1;
+  } 
+  
+  // Checking for Y axis
+  else if(yAxis>xAxis && yAxis>zAxis) {
+    // Mapping positive angle on Y axis to side 4 and negative angle to side 5
+    if(yAng>0) ret_val = 4;
+    else ret_val = 5;
+  } 
+  
+  // Checking for Z axis
+  else if(zAxis>yAxis && zAxis>xAxis) {
+    // Mapping positive angle on Z axis to side 0 and negative angle to side 2
+    if(zAng>0) ret_val = 0;
+    else ret_val = 2;
+  }
+  
+  return ret_val; // Bitwise math to combine the values, first shifting s1 value 1 bit left and compares to s2 on bit level
+}
